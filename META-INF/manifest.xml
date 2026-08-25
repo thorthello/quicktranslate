@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<manifest:manifest xmlns:manifest="http://openoffice.org/2001/manifest">
+  <!-- Configuration data for LibreOffice Add-on Toolbar Integration -->
+  <manifest:file-entry
+    manifest:full-path="registry/data/org/openoffice/Office/Addons.xcu"
+    manifest:media-type="application/vnd.sun.star.configuration-data"/>
+
+  <!-- Python UNO component registration -->
+  <manifest:file-entry
+    manifest:full-path="python/quick_translator.py"
+    manifest:media-type="application/vnd.sun.star.uno-component;type=Python"/>
+</manifest:manifest>

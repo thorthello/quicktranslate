@@ -1,0 +1,13 @@
+Quick Translator for LibreOffice
+=================================
+A universal translation extension for LibreOffice Writer, Calc, and Impress.
+
+Features:
+- Single-click toolbar button 'Translate' in the Add-ons toolbar
+- Automatically captures selected text from active document / cell / slide
+- Compact, native pop-up GUI dialog (Quick Translator)
+- Language selection with European, Nordic, and Asian languages
+- Smart swap button (with AUTO -> IT / DA special logic)
+- Real-time online translation with UTF-8 encoding support
+- Robust error handling and offline detection
+- Zero registry conflicts and 100% clean modern UNO component architecture.
