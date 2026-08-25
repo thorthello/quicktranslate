@@ -31,4 +31,4 @@ License: GPL-3.0
 <br/>
 "The design, logical architecture, and interface of this tool are the result of my effort to fill a gap that has existed in this software for a decade. For the actual code generation, I relied on Google AI Studio, actively iterating and testing solutions to ensure the best possible usability."<br/>
 Thank you for your understanding.<br/>
-Best regards: ThorThello<br/>
+Best regards, ThorThello<br/>
