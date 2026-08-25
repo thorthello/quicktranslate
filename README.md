@@ -1,4 +1,8 @@
-Description
+<img width="64" height="64" alt="QuickTranslate" src="https://github.com/user-attachments/assets/441db9db-f685-4fcd-b036-e9b406719275" />
+
+<img width="559" height="679" alt="Screenshot From 2026-08-24 20-34-16" src="https://github.com/user-attachments/assets/4885c542-5fac-4f6d-9f0d-5d66dc4fb189" />
+
+[B]Description[/B]
 
 Quick Translator is a clean, lightweight, and user-friendly extension for LibreOffice that allows you to quickly translate selected text without leaving your document.
 
