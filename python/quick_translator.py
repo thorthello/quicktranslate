@@ -19,44 +19,78 @@ Compatible with LibreOffice 5.x, 6.x, 7.x, 24.x+ on Linux, Windows, macOS.
 import uno
 import unohelper
 import json
+import os
 import urllib.request
 import urllib.parse
 import html
 import traceback
 
 from com.sun.star.task import XJobExecutor
-from com.sun.star.awt import XActionListener
+from com.sun.star.awt import XActionListener, XItemListener
 
-# Supported language definitions (European, Nordic, Asian focus)
+# Supported language definitions in Alphabetical Order (A-Z)
 LANGUAGES = [
     ("AUTO", "AUTO - Automatic Detection"),
-    ("IT", "IT - Italian"),
-    ("DA", "DA - Danish"),
-    ("EN", "EN - English"),
-    ("DE", "DE - German"),
-    ("FR", "FR - French"),
-    ("ES", "ES - Spanish"),
-    ("NL", "NL - Dutch"),
-    ("PT", "PT - Portuguese"),
-    ("PL", "PL - Polish"),
-    ("EL", "EL - Greek"),
-    ("CS", "CS - Czech"),
-    ("HU", "HU - Hungarian"),
-    ("RO", "RO - Romanian"),
-    ("SV", "SV - Swedish"),
-    ("NO", "NO - Norwegian"),
-    ("FI", "FI - Finnish"),
-    ("IS", "IS - Icelandic"),
+    ("AR", "AR - Arabic"),
     ("ZH", "ZH - Chinese (Simplified)"),
+    ("CS", "CS - Czech"),
+    ("DA", "DA - Danish"),
+    ("NL", "NL - Dutch"),
+    ("EN", "EN - English"),
+    ("FI", "FI - Finnish"),
+    ("FR", "FR - French"),
+    ("DE", "DE - German"),
+    ("EL", "EL - Greek"),
+    ("HI", "HI - Hindi"),
+    ("HU", "HU - Hungarian"),
+    ("IS", "IS - Icelandic"),
+    ("ID", "ID - Indonesian"),
+    ("IT", "IT - Italian"),
     ("JA", "JA - Japanese"),
     ("KO", "KO - Korean"),
-    ("HI", "HI - Hindi"),
-    ("AR", "AR - Arabic"),
-    ("TR", "TR - Turkish"),
-    ("VI", "VI - Vietnamese"),
+    ("NO", "NO - Norwegian"),
+    ("PL", "PL - Polish"),
+    ("PT", "PT - Portuguese"),
+    ("RO", "RO - Romanian"),
+    ("ES", "ES - Spanish"),
+    ("SV", "SV - Swedish"),
     ("TH", "TH - Thai"),
-    ("ID", "ID - Indonesian")
+    ("TR", "TR - Turkish"),
+    ("VI", "VI - Vietnamese")
 ]
+
+def get_prefs_file_path():
+    """Returns the config file path for saving user preferences across sessions."""
+    try:
+        home_dir = os.path.expanduser("~")
+        return os.path.join(home_dir, ".libreoffice_quick_translator_prefs.json")
+    except Exception:
+        return None
+
+def load_saved_preferences():
+    """Loads previously saved language selections (Target Language & Source Language)."""
+    p = get_prefs_file_path()
+    if p and os.path.exists(p):
+        try:
+            with open(p, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                return {
+                    "source_lang": data.get("source_lang", "AUTO"),
+                    "target_lang": data.get("target_lang", "IT")
+                }
+        except Exception as e:
+            print("[QuickTranslator] Failed to load preferences:", e)
+    return {"source_lang": "AUTO", "target_lang": "IT"}
+
+def save_preferences(source_lang, target_lang):
+    """Saves user language selection so it persists across sessions."""
+    p = get_prefs_file_path()
+    if p:
+        try:
+            with open(p, "w", encoding="utf-8") as f:
+                json.dump({"source_lang": source_lang, "target_lang": target_lang}, f, indent=2)
+        except Exception as e:
+            print("[QuickTranslator] Failed to save preferences:", e)
 
 def get_active_document_selection(ctx):
     """
@@ -178,11 +212,10 @@ class QuickTranslatorDialog(unohelper.Base):
         smgr = self.ctx.ServiceManager
         
         # 1. Create Dialog Model (Movable, Closeable, Desktop-independent Floating Window)
-        # Dimensions: 20% narrower (224) and 25% taller (275)
         dialog_model = smgr.createInstanceWithContext("com.sun.star.awt.UnoControlDialogModel", self.ctx)
         dialog_model.PositionX = 150
         dialog_model.PositionY = 100
-        dialog_model.Width = 224
+        dialog_model.Width = 264
         dialog_model.Height = 275
         dialog_model.Title = "Quick Translator"
         dialog_model.DesktopAsParent = True
@@ -190,22 +223,33 @@ class QuickTranslatorDialog(unohelper.Base):
         dialog_model.Closeable = True
         dialog_model.Decoration = True
 
-        # 2. Controls - Row 1: Source Language Dropdown
+        # Load saved user language preferences (Default: AUTO -> IT)
+        prefs = load_saved_preferences()
+        saved_src = prefs.get("source_lang", "AUTO")
+        saved_tgt = prefs.get("target_lang", "IT")
+
+        # 2. Controls - Row 1: Source Language Dropdown (Lengthened by 20%: Width 88, LineCount=14)
         src_model = dialog_model.createInstance("com.sun.star.awt.UnoControlListBoxModel")
         src_model.PositionX = 6
         src_model.PositionY = 8
-        src_model.Width = 72
+        src_model.Width = 88
         src_model.Height = 14
         src_model.Dropdown = True
+        src_model.LineCount = 14
         src_model.Name = "SourceLangList"
         src_items = [label for code, label in LANGUAGES]
         src_model.StringItemList = tuple(src_items)
-        src_model.SelectedItems = (0,) # AUTO is default
+        src_idx = 0
+        for i, item in enumerate(src_items):
+            if item.startswith(saved_src + " -") or item == saved_src:
+                src_idx = i
+                break
+        src_model.SelectedItems = (src_idx,)
         dialog_model.insertByName("SourceLangList", src_model)
 
         # 3. Controls - Row 1: Swap Button ("⇄")
         swap_model = dialog_model.createInstance("com.sun.star.awt.UnoControlButtonModel")
-        swap_model.PositionX = 81
+        swap_model.PositionX = 98
         swap_model.PositionY = 8
         swap_model.Width = 16
         swap_model.Height = 14
@@ -214,29 +258,30 @@ class QuickTranslatorDialog(unohelper.Base):
         swap_model.HelpText = "Swap Languages (Special: AUTO -> IT / DA)"
         dialog_model.insertByName("SwapBtn", swap_model)
 
-        # 4. Controls - Row 1: Target Language Dropdown
+        # 4. Controls - Row 1: Target Language Dropdown (Lengthened by 20%: Width 86, LineCount=14)
         tgt_model = dialog_model.createInstance("com.sun.star.awt.UnoControlListBoxModel")
-        tgt_model.PositionX = 100
+        tgt_model.PositionX = 118
         tgt_model.PositionY = 8
-        tgt_model.Width = 68
+        tgt_model.Width = 86
         tgt_model.Height = 14
         tgt_model.Dropdown = True
+        tgt_model.LineCount = 14
         tgt_model.Name = "TargetLangList"
         tgt_items = [label for code, label in LANGUAGES if code != "AUTO"]
         tgt_model.StringItemList = tuple(tgt_items)
-        it_idx = 0
+        tgt_idx = 0
         for i, item in enumerate(tgt_items):
-            if item.startswith("IT -"):
-                it_idx = i
+            if item.startswith(saved_tgt + " -") or item == saved_tgt:
+                tgt_idx = i
                 break
-        tgt_model.SelectedItems = (it_idx,)
+        tgt_model.SelectedItems = (tgt_idx,)
         dialog_model.insertByName("TargetLangList", tgt_model)
 
         # 5. Controls - Row 1: Translate Button ("Translate")
         trans_model = dialog_model.createInstance("com.sun.star.awt.UnoControlButtonModel")
-        trans_model.PositionX = 171
+        trans_model.PositionX = 208
         trans_model.PositionY = 8
-        trans_model.Width = 47
+        trans_model.Width = 50
         trans_model.Height = 14
         trans_model.Label = "Translate"
         trans_model.Name = "TranslateBtn"
@@ -246,7 +291,7 @@ class QuickTranslatorDialog(unohelper.Base):
         lbl_src = dialog_model.createInstance("com.sun.star.awt.UnoControlFixedTextModel")
         lbl_src.PositionX = 6
         lbl_src.PositionY = 26
-        lbl_src.Width = 212
+        lbl_src.Width = 252
         lbl_src.Height = 8
         lbl_src.Label = "Source Text:"
         lbl_src.FontWeight = 150.0  # Bold font weight
@@ -255,7 +300,7 @@ class QuickTranslatorDialog(unohelper.Base):
         src_text_model = dialog_model.createInstance("com.sun.star.awt.UnoControlEditModel")
         src_text_model.PositionX = 6
         src_text_model.PositionY = 36
-        src_text_model.Width = 212
+        src_text_model.Width = 252
         src_text_model.Height = 98
         src_text_model.MultiLine = True
         src_text_model.VScroll = True
@@ -267,7 +312,7 @@ class QuickTranslatorDialog(unohelper.Base):
         lbl_tgt = dialog_model.createInstance("com.sun.star.awt.UnoControlFixedTextModel")
         lbl_tgt.PositionX = 6
         lbl_tgt.PositionY = 138
-        lbl_tgt.Width = 212
+        lbl_tgt.Width = 252
         lbl_tgt.Height = 8
         lbl_tgt.Label = "Translated Text:"
         lbl_tgt.FontWeight = 150.0  # Bold font weight
@@ -276,7 +321,7 @@ class QuickTranslatorDialog(unohelper.Base):
         tgt_text_model = dialog_model.createInstance("com.sun.star.awt.UnoControlEditModel")
         tgt_text_model.PositionX = 6
         tgt_text_model.PositionY = 148
-        tgt_text_model.Width = 212
+        tgt_text_model.Width = 252
         tgt_text_model.Height = 98
         tgt_text_model.MultiLine = True
         tgt_text_model.VScroll = True
@@ -288,7 +333,7 @@ class QuickTranslatorDialog(unohelper.Base):
         status_model = dialog_model.createInstance("com.sun.star.awt.UnoControlFixedTextModel")
         status_model.PositionX = 6
         status_model.PositionY = 252
-        status_model.Width = 212
+        status_model.Width = 252
         status_model.Height = 16
         status_model.Label = "Ready to translate."
         status_model.Name = "StatusLabel"
@@ -305,7 +350,7 @@ class QuickTranslatorDialog(unohelper.Base):
         self.target_box = self.dialog.getControl("TranslatedTextBox")
         self.status_label = self.dialog.getControl("StatusLabel")
 
-        # 10. Bind Action Listeners
+        # 10. Bind Action Listeners & Item Listeners
         class SwapListener(unohelper.Base, XActionListener):
             def __init__(self, parent):
                 self.parent = parent
@@ -326,8 +371,20 @@ class QuickTranslatorDialog(unohelper.Base):
             def disposing(self, source):
                 pass
 
+        class ItemChangeListener(unohelper.Base, XItemListener):
+            def __init__(self, parent):
+                self.parent = parent
+
+            def itemStateChanged(self, itemEvent):
+                self.parent.on_lang_changed()
+
+            def disposing(self, source):
+                pass
+
         self.dialog.getControl("SwapBtn").addActionListener(SwapListener(self))
         self.dialog.getControl("TranslateBtn").addActionListener(TranslateListener(self))
+        self.target_list.addItemListener(ItemChangeListener(self))
+        self.source_list.addItemListener(ItemChangeListener(self))
 
         # Create window peer and execute dialog
         toolkit = smgr.createInstanceWithContext("com.sun.star.awt.Toolkit", self.ctx)
@@ -359,6 +416,15 @@ class QuickTranslatorDialog(unohelper.Base):
                 list_control.selectItemPos(idx, True)
                 return
 
+    def on_lang_changed(self):
+        """Persists chosen language immediately when user changes dropdown selection."""
+        try:
+            src_code = self.get_selected_code(self.source_list, is_source=True)
+            tgt_code = self.get_selected_code(self.target_list, is_source=False)
+            save_preferences(src_code, tgt_code)
+        except Exception as e:
+            print("[QuickTranslator] on_lang_changed save error:", e)
+
     def on_swap_clicked(self):
         """
         Swap logic implementation:
@@ -373,11 +439,13 @@ class QuickTranslatorDialog(unohelper.Base):
             self.set_selected_by_code(self.source_list, "IT")
             self.set_selected_by_code(self.target_list, "DA")
             self.status_label.setText("Languages swapped: IT (Source) ⇄ DA (Target)")
+            save_preferences("IT", "DA")
         else:
             # Standard swap
             self.set_selected_by_code(self.source_list, tgt_code)
             self.set_selected_by_code(self.target_list, src_code)
             self.status_label.setText(f"Languages swapped: {tgt_code} ⇄ {src_code}")
+            save_preferences(tgt_code, src_code)
 
         # Automatically translate if source text is present
         if self.source_box and self.source_box.getText().strip():
@@ -395,6 +463,9 @@ class QuickTranslatorDialog(unohelper.Base):
 
         src_code = self.get_selected_code(self.source_list, is_source=True)
         tgt_code = self.get_selected_code(self.target_list, is_source=False)
+
+        # Save user preferences
+        save_preferences(src_code, tgt_code)
 
         self.status_label.setText(f"Translating from {src_code} to {tgt_code}...")
 
