@@ -5,7 +5,53 @@
                     oor:package="org.openoffice.Office">
   <node oor:name="AddonUI">
     
-    <!-- OfficeToolBar integration: Adds a SINGLE "Translate" button to the Addons toolbar -->
+    <!-- 1. AddonMenu: Integrated into Tools -> Add-Ons (Strumenti -> Componenti aggiuntivi) -->
+    <node oor:name="AddonMenu">
+      <node oor:name="org.libreoffice.quicktranslator.addonmenu" oor:op="replace">
+        <prop oor:name="URL" oor:type="xs:string">
+          <value>service:org.libreoffice.quicktranslator.TranslatorService?open</value>
+        </prop>
+        <prop oor:name="Title" oor:type="xs:string">
+          <value>Quick Translator</value>
+        </prop>
+        <prop oor:name="Target" oor:type="xs:string">
+          <value>_self</value>
+        </prop>
+        <prop oor:name="Context" oor:type="xs:string">
+          <value>com.sun.star.text.TextDocument,com.sun.star.sheet.SpreadsheetDocument,com.sun.star.presentation.PresentationDocument,com.sun.star.drawing.DrawingDocument</value>
+        </prop>
+      </node>
+    </node>
+
+    <!-- 2. OfficeMenuBar: Adds dedicated "Translate" top menu item -->
+    <node oor:name="OfficeMenuBar">
+      <node oor:name="org.libreoffice.quicktranslator.menubar" oor:op="replace">
+        <prop oor:name="Title" oor:type="xs:string">
+          <value>Translate</value>
+        </prop>
+        <prop oor:name="Context" oor:type="xs:string">
+          <value>com.sun.star.text.TextDocument,com.sun.star.sheet.SpreadsheetDocument,com.sun.star.presentation.PresentationDocument,com.sun.star.drawing.DrawingDocument</value>
+        </prop>
+        <node oor:name="Submenu">
+          <node oor:name="m1" oor:op="replace">
+            <prop oor:name="URL" oor:type="xs:string">
+              <value>service:org.libreoffice.quicktranslator.TranslatorService?open</value>
+            </prop>
+            <prop oor:name="Title" oor:type="xs:string">
+              <value>Quick Translator...</value>
+            </prop>
+            <prop oor:name="Target" oor:type="xs:string">
+              <value>_self</value>
+            </prop>
+            <prop oor:name="Context" oor:type="xs:string">
+              <value>com.sun.star.text.TextDocument,com.sun.star.sheet.SpreadsheetDocument,com.sun.star.presentation.PresentationDocument,com.sun.star.drawing.DrawingDocument</value>
+            </prop>
+          </node>
+        </node>
+      </node>
+    </node>
+
+    <!-- 3. OfficeToolBar: Adds dedicated Toolbar with single "Translate" button -->
     <node oor:name="OfficeToolBar">
       <node oor:name="org.libreoffice.quicktranslator.toolbar" oor:op="replace">
         <node oor:name="m1" oor:op="replace">
@@ -25,7 +71,7 @@
       </node>
     </node>
 
-    <!-- Images / Icons for Toolbar Button -->
+    <!-- 4. Images / Icons for Toolbar & Menu integration -->
     <node oor:name="Images">
       <node oor:name="org.libreoffice.quicktranslator.images" oor:op="replace">
         <prop oor:name="URL" oor:type="xs:string">
