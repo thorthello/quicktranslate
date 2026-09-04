@@ -22,6 +22,9 @@ import json
 import os
 import urllib.request
 import urllib.parse
+import urllib.error
+import ssl
+import socket
 import html
 import traceback
 
@@ -136,10 +139,117 @@ def get_active_document_selection(ctx):
     return ""
 
 
+BROWSER_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+
+def make_http_get_request(url, timeout=12):
+    """
+    Executes an HTTP/HTTPS GET request engineered for enterprise, school, and home networks:
+    1. Uses standard Chrome browser headers to prevent rejection by school WAF/bot filters.
+    2. Automatically uses system-configured HTTP/HTTPS proxies (KDE, GNOME, Windows).
+    3. Handles school/corporate SSL inspection (MITM): if custom root certificates fail
+       Python's default verification, automatically retries with unverified SSL context.
+    """
+    headers = {
+        "User-Agent": BROWSER_USER_AGENT,
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Connection": "close"
+    }
+    req = urllib.request.Request(url, headers=headers)
+    
+    # Attempt 1: Standard verified SSL request (with system proxy if configured)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as response:
+            if response.status == 200:
+                return response.read().decode("utf-8", errors="replace")
+            raise urllib.error.HTTPError(url, response.status, f"HTTP Error {response.status}", response.headers, None)
+    except urllib.error.URLError as url_err:
+        err_msg = str(url_err).lower()
+        reason_msg = str(getattr(url_err, "reason", "")).lower()
+        # Detect SSL verification failure from school firewall/proxy certificate
+        is_ssl = "certificate_verify_failed" in err_msg or "certificate_verify_failed" in reason_msg or "ssl" in reason_msg
+        if is_ssl:
+            print("[QuickTranslator] SSL inspection detected; retrying with unverified context...")
+            try:
+                unverified_ctx = ssl._create_unverified_context()
+                with urllib.request.urlopen(req, timeout=timeout, context=unverified_ctx) as response:
+                    if response.status == 200:
+                        return response.read().decode("utf-8", errors="replace")
+            except Exception as ssl_e:
+                raise ssl_e
+        raise url_err
+    except Exception as general_err:
+        if "certificate_verify_failed" in str(general_err).lower():
+            try:
+                unverified_ctx = ssl._create_unverified_context()
+                with urllib.request.urlopen(req, timeout=timeout, context=unverified_ctx) as response:
+                    if response.status == 200:
+                        return response.read().decode("utf-8", errors="replace")
+            except Exception as ssl_e:
+                raise ssl_e
+        raise general_err
+
+
+def diagnose_network_failure(errors):
+    """
+    Produces a clear, professional English diagnostic report identifying whether
+    the translation failure is caused by a school firewall, SSL interception,
+    proxy authentication, content filtering, rate limiting, or captive portal.
+    """
+    combined = " | ".join([str(e) for e in errors])
+    combined_lower = combined.lower()
+
+    if "certificate_verify_failed" in combined_lower or "self-signed" in combined_lower or "sslcipher" in combined_lower:
+        issue = "School / Corporate SSL Inspection Firewall"
+        detail = "The school network firewall is intercepting secure HTTPS traffic with a custom security certificate not recognized by LibreOffice's Python runtime."
+        advice = "Ask your school IT administrator if an institutional root certificate is required, or connect via an unrestricted mobile hotspot."
+    elif "407" in combined_lower or "proxy authentication" in combined_lower:
+        issue = "Proxy Authentication Required"
+        detail = "The school or enterprise network requires authentication credentials to route web traffic through its proxy server."
+        advice = "Configure your proxy credentials in LibreOffice under: Tools > Options > Internet > Proxy."
+    elif "getaddrinfo failed" in combined_lower or "name or service not known" in combined_lower or "gaierror" in combined_lower or "nodename" in combined_lower:
+        issue = "DNS / Content Filter Block"
+        detail = "The translation domain servers (api.mymemory.translated.net / translate.googleapis.com) could not be resolved by DNS."
+        advice = "The school's DNS server or firewall content filter is likely restricting translation domains."
+    elif "403" in combined_lower or "forbidden" in combined_lower:
+        issue = "Network Access Forbidden (HTTP 403)"
+        detail = "Outbound translation requests were rejected by the network gateway or captive portal."
+        advice = "Open a web browser to verify if you must log into the school Wi-Fi (Captive Portal) before accessing the internet."
+    elif "timed out" in combined_lower or "timeout" in combined_lower:
+        issue = "Network Timeout / Bandwidth Throttling"
+        detail = "The translation service did not respond within the 12-second window."
+        advice = "The school Wi-Fi may be saturated or heavily throttling outbound API traffic. Please retry in a few moments."
+    elif "429" in combined_lower:
+        issue = "Rate Limit Exceeded (HTTP 429)"
+        detail = "Too many translation requests have been sent from this shared school IP address."
+        advice = "Please wait a couple of minutes before attempting another translation."
+    elif "connection refused" in combined_lower or "errno 111" in combined_lower:
+        issue = "Connection Actively Refused by Firewall"
+        detail = "The network router or firewall actively refused outbound connections on port 443."
+        advice = "Check if external HTTPS connections to translation services are restricted by school policy."
+    else:
+        issue = "Internet / Network Connectivity Error"
+        detail = "Could not establish a connection with any online translation service."
+        advice = "Check your Wi-Fi or Ethernet connection, ensure captive portal login is complete, or test on another network."
+
+    report = (
+        "[Translation Diagnostic Report]\n"
+        f"Diagnosed Cause: {issue}\n\n"
+        f"Details: {detail}\n\n"
+        "Suggested Solutions:\n"
+        f"1. {advice}\n"
+        "2. Test if your web browser can open: https://translate.google.com\n"
+        "3. If on school Wi-Fi, verify that proxy/captive portal login has not expired.\n\n"
+        f"Technical Log: {combined}"
+    )
+    return report
+
+
 def perform_online_translation(text, source_lang="AUTO", target_lang="IT"):
     """
     Translates text using online translation APIs with proper UTF-8 and URL encoding.
-    Fallback chain ensures maximum reliability.
+    Uses a multi-tier fallback chain (MyMemory -> Google GTX -> Google Client5),
+    with browser headers and school network SSL resilience.
     """
     if not text or not text.strip():
         return ""
@@ -147,50 +257,57 @@ def perform_online_translation(text, source_lang="AUTO", target_lang="IT"):
     clean_text = text.strip()
     src_param = "autodetect" if source_lang == "AUTO" else source_lang.lower()
     tgt_param = target_lang.lower()
+    sl_google = "auto" if source_lang == "AUTO" else source_lang.lower()
+    encoded_query = urllib.parse.quote(clean_text.encode("utf-8"))
+
+    errors = []
 
     # 1. Primary Service: MyMemory API (Free tier, no API key required)
     try:
         lang_pair = f"{src_param}|{tgt_param}"
-        encoded_query = urllib.parse.quote(clean_text.encode("utf-8"))
         url = f"https://api.mymemory.translated.net/get?q={encoded_query}&langpair={lang_pair}"
-        
-        req = urllib.request.Request(
-            url,
-            headers={"User-Agent": "LibreOffice-QuickTranslator/1.0"}
-        )
-        
-        with urllib.request.urlopen(req, timeout=8) as response:
-            if response.status == 200:
-                raw_data = response.read().decode("utf-8")
-                data = json.loads(raw_data)
-                if "responseData" in data and "translatedText" in data["responseData"]:
-                    result = data["responseData"]["translatedText"]
-                    if not result.startswith("MYMEMORY WARNING:"):
-                        return html.unescape(result)
+        raw_data = make_http_get_request(url, timeout=12)
+        data = json.loads(raw_data)
+        if "responseData" in data and "translatedText" in data["responseData"]:
+            result = data["responseData"]["translatedText"]
+            if not result.startswith("MYMEMORY WARNING:"):
+                return html.unescape(result)
+            else:
+                errors.append(f"MyMemory quota warning: {result[:50]}")
     except Exception as e1:
-        print("[QuickTranslator] MyMemory API error:", e1)
+        print("[QuickTranslator] MyMemory API attempt failed:", e1)
+        errors.append(f"MyMemory: {e1}")
 
-    # 2. Secondary Service: Google Translate public endpoint fallback
+    # 2. Secondary Service: Google Translate public GTX endpoint
     try:
-        sl = "auto" if source_lang == "AUTO" else source_lang.lower()
-        encoded_q = urllib.parse.quote(clean_text.encode("utf-8"))
-        gt_url = f"https://translate.googleapis.com/translate_a/single?client=gtx&sl={sl}&tl={tgt_param}&dt=t&q={encoded_q}"
-        
-        req2 = urllib.request.Request(
-            gt_url,
-            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
-        )
-        with urllib.request.urlopen(req2, timeout=8) as response:
-            if response.status == 200:
-                raw_data = response.read().decode("utf-8")
-                gt_json = json.loads(raw_data)
-                if isinstance(gt_json, list) and len(gt_json) > 0 and isinstance(gt_json[0], list):
-                    translated_chunks = [chunk[0] for chunk in gt_json[0] if chunk and len(chunk) > 0 and chunk[0]]
-                    return "".join(translated_chunks)
+        gt_url = f"https://translate.googleapis.com/translate_a/single?client=gtx&sl={sl_google}&tl={tgt_param}&dt=t&q={encoded_query}"
+        raw_data = make_http_get_request(gt_url, timeout=12)
+        gt_json = json.loads(raw_data)
+        if isinstance(gt_json, list) and len(gt_json) > 0 and isinstance(gt_json[0], list):
+            translated_chunks = [chunk[0] for chunk in gt_json[0] if chunk and len(chunk) > 0 and chunk[0]]
+            if translated_chunks:
+                return "".join(translated_chunks)
     except Exception as e2:
-        print("[QuickTranslator] Fallback service error:", e2)
+        print("[QuickTranslator] Google GTX attempt failed:", e2)
+        errors.append(f"Google GTX: {e2}")
 
-    raise RuntimeError("Unable to reach translation server. Please check your internet connection.")
+    # 3. Tertiary Service: Google Translate Client5 endpoint (dict-chrome-ex)
+    try:
+        alt_url = f"https://clients5.google.com/translate_a/t?client=dict-chrome-ex&sl={sl_google}&tl={tgt_param}&q={encoded_query}"
+        raw_data = make_http_get_request(alt_url, timeout=12)
+        alt_json = json.loads(raw_data)
+        if isinstance(alt_json, list) and len(alt_json) > 0:
+            if isinstance(alt_json[0], str):
+                return alt_json[0]
+            elif isinstance(alt_json[0], list) and len(alt_json[0]) > 0 and isinstance(alt_json[0][0], str):
+                return alt_json[0][0]
+    except Exception as e3:
+        print("[QuickTranslator] Google Client5 attempt failed:", e3)
+        errors.append(f"Google Client5: {e3}")
+
+    # If all endpoints failed, build diagnostic report
+    report = diagnose_network_failure(errors)
+    raise RuntimeError(report)
 
 
 class QuickTranslatorDialog(unohelper.Base):
@@ -474,9 +591,11 @@ class QuickTranslatorDialog(unohelper.Base):
             self.target_box.setText(translated)
             self.status_label.setText("Translation completed successfully!")
         except Exception as e:
-            error_msg = f"Translation error: {str(e)}"
-            self.target_box.setText(error_msg)
-            self.status_label.setText("Error during translation. See output box.")
+            raw_err = str(e)
+            if raw_err.startswith("RuntimeError: "):
+                raw_err = raw_err[len("RuntimeError: "):]
+            self.target_box.setText(raw_err)
+            self.status_label.setText("Network error: see diagnostic report in output box.")
 
 
 # --- Modern LibreOffice UNO Component Implementation ---
