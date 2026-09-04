@@ -4,13 +4,15 @@
 <img height="400" alt="Screenshot From 2026-08-24 20-34-16" src="https://github.com/user-attachments/assets/4885c542-5fac-4f6d-9f0d-5d66dc4fb189" />
 </p>
 
-**Description**
-
+**Description**<br/>
+<br/>
 Quick Translator is a clean, lightweight, and user-friendly extension for LibreOffice that allows you to quickly translate selected text without leaving your document.
-
+<br/>
 Designed for seamless productivity across LibreOffice Writer, Calc, and Impress, Quick Translator adds a dedicated "Translate" button to your toolbar. When clicked, it automatically captures your selected text and opens an independent, movable floating dialog for fast multi-language translation.
-
-**Key Features:**
+<br/>
+<br/>
+**Key Features:**<br/>
+<br/>
 • Seamless Workflow: Select text in your document, cell, or presentation and click "Translate" to translate instantly.
 • Independent Floating Dialog: The translation window is freely movable, allowing you to read or edit your document while keeping the translation visible.
 • Auto-Language Detection: Automatically detects the source language of your selected text.
@@ -18,14 +20,13 @@ Designed for seamless productivity across LibreOffice Writer, Calc, and Impress,
 • Bidirectional Language Swap: Easily switch source and target languages with a single click.
 • Zero Configuration: Ready to use immediately upon installation with no setup needed.
 
-**Compatibility:**
-Works on Windows, macOS, and Linux with LibreOffice 6.x, 7.x, 24.x, and newer.
-
-Title / Name: Quick Translator
-Release Version: 1.0.0
-Category: Languages and Linguistics, Productivity Tools
-Compatibility: LibreOffice 6.x, 7.x, 24.x, 25.x (All Platforms: Windows, macOS, Linux)
-License: GPL-3.0
+**Compatibility:**<br/>
+Works on Windows, macOS, and Linux with LibreOffice 6.x, 7.x, 24.x, and newer.<br/>
+<br/>
+Title / Name: Quick Translator<br/>
+Category: Languages and Linguistics, Productivity Tools<br/>
+Compatibility: LibreOffice 6.x, 7.x, 24.x, 25.x (All Platforms: Windows, macOS, Linux)<br/>
+License: GPL-3.0<br/>
 <br/>
 <br/>
 <br/>
