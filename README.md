@@ -15,13 +15,13 @@ Designed for seamless productivity across LibreOffice Writer, Calc, and Impress,
 <br/>
 **Key Features:**<br/>
 <br/>
-• Seamless Workflow: Select text in your document, cell, or presentation and click "Translate" to translate instantly.
-• Independent Floating Dialog: The translation window is freely movable, allowing you to read or edit your document while keeping the translation visible.
-• Auto-Language Detection: Automatically detects the source language of your selected text.
-• Over 15 Popular Languages: Fast translation support for English, Italian, Spanish, French, German, Portuguese, Russian, Chinese, Japanese, Korean, Arabic, and more.
-• Bidirectional Language Swap: Easily switch source and target languages with a single click.
-• Zero Configuration: Ready to use immediately upon installation with no setup needed.
-
+• Seamless Workflow: Select text in your document, cell, or presentation and click "Translate" to translate instantly.<br/>
+• Independent Floating Dialog: The translation window is freely movable, allowing you to read or edit your document while keeping the translation visible.<br/>
+• Auto-Language Detection: Automatically detects the source language of your selected text.<br/>
+• Over 15 Popular Languages: Fast translation support for English, Italian, Spanish, French, German, Portuguese, Russian, Chinese, Japanese, Korean, Arabic, and more.<br/>
+• Bidirectional Language Swap: Easily switch source and target languages with a single click.<br/>
+• Zero Configuration: Ready to use immediately upon installation with no setup needed.<br/>
+<br/>
 **Compatibility:**<br/>
 Works on Windows, macOS, and Linux with LibreOffice 6.x, 7.x, 24.x, and newer.<br/>
 <br/>
