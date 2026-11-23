@@ -33,6 +33,8 @@ License: GPL-3.0<br/>
 <br/>
 <br/>
 <br/>
+> **Privacy & Network Notice:** This extension requires an active internet connection and sends the text you choose to translate to third-party translation servers (`translate.googleapis.com`, `clients5.google.com`, and `api.mymemory.translated.net` as fallback). Do not use it with confidential or sensitive data.
+<br/>
 "The design, logical architecture, and interface of this tool are the result of my effort to fill a gap that has existed in this software for a decade. For the actual code generation, I relied on Google Antigravity, actively iterating and testing solutions to ensure the best possible usability."<br/>
 Thank you for your understanding.<br/>
 Best regards, ThorThello<br/>
