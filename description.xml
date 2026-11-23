@@ -3,7 +3,7 @@
              xmlns:d="http://openoffice.org/extensions/description/2006"
              xmlns:xlink="http://www.w3.org/1999/xlink">
   <identifier value="org.libreoffice.extensions.quicktranslator"/>
-  <version value="1.1.0"/>
+  <version value="1.5"/>
   
   <dependencies>
     <OpenOffice.org-minimal-version value="4.0" d:name="LibreOffice 4.0+"/>

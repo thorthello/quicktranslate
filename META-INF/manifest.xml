@@ -4,6 +4,17 @@
   <manifest:file-entry
     manifest:full-path="registry/data/org/openoffice/Office/Addons.xcu"
     manifest:media-type="application/vnd.sun.star.configuration-data"/>
+  <manifest:file-entry
+    manifest:full-path="registry/data/org/openoffice/Office/Accelerators.xcu"
+    manifest:media-type="application/vnd.sun.star.configuration-data"/>
+
+  <!-- Configuration data for LibreOffice Sidebar Integration -->
+  <manifest:file-entry
+    manifest:full-path="registry/data/org/openoffice/Office/UI/Sidebar.xcu"
+    manifest:media-type="application/vnd.sun.star.configuration-data"/>
+  <manifest:file-entry
+    manifest:full-path="registry/data/org/openoffice/Office/UI/Factories.xcu"
+    manifest:media-type="application/vnd.sun.star.configuration-data"/>
 
   <!-- Python UNO component registration -->
   <manifest:file-entry

@@ -20,6 +20,7 @@ import uno
 import unohelper
 import json
 import os
+import threading
 import urllib.request
 import urllib.parse
 import urllib.error
@@ -29,7 +30,11 @@ import html
 import traceback
 
 from com.sun.star.task import XJobExecutor
-from com.sun.star.awt import XActionListener, XItemListener
+from com.sun.star.awt import XActionListener, XItemListener, XWindowListener, PosSize
+from com.sun.star.ui import XUIElementFactory, XUIElement, XToolPanel, XSidebarPanel, UIElementType, LayoutSize
+from com.sun.star.lang import XComponent, EventObject
+from com.sun.star.view import XSelectionChangeListener
+from com.sun.star.datatransfer import XTransferable, DataFlavor
 
 # Supported language definitions in Alphabetical Order (A-Z)
 LANGUAGES = [
@@ -95,15 +100,21 @@ def save_preferences(source_lang, target_lang):
         except Exception as e:
             print("[QuickTranslator] Failed to save preferences:", e)
 
-def get_active_document_selection(ctx):
+def get_active_document_selection(ctx, frame=None):
     """
     Extracts highlighted/selected text from the active document (Writer, Calc, or Impress).
     Returns an empty string if no text is currently selected.
     """
     try:
-        smgr = ctx.ServiceManager
-        desktop = smgr.createInstanceWithContext("com.sun.star.frame.Desktop", ctx)
-        model = desktop.getCurrentComponent()
+        model = None
+        if frame is not None:
+            controller = frame.getController()
+            if controller is not None:
+                model = controller.getModel()
+        if model is None:
+            smgr = ctx.ServiceManager
+            desktop = smgr.createInstanceWithContext("com.sun.star.frame.Desktop", ctx)
+            model = desktop.getCurrentComponent()
 
         if not model:
             return ""
@@ -141,7 +152,7 @@ def get_active_document_selection(ctx):
 
 BROWSER_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
 
-def make_http_get_request(url, timeout=12):
+def make_http_get_request(url, timeout=4):
     """
     Executes an HTTP/HTTPS GET request engineered for enterprise, school, and home networks:
     1. Uses standard Chrome browser headers to prevent rejection by school WAF/bot filters.
@@ -248,8 +259,8 @@ def diagnose_network_failure(errors):
 def perform_online_translation(text, source_lang="AUTO", target_lang="IT"):
     """
     Translates text using online translation APIs with proper UTF-8 and URL encoding.
-    Uses a multi-tier fallback chain (MyMemory -> Google GTX -> Google Client5),
-    with browser headers and school network SSL resilience.
+    Prioritizes low-latency endpoints (Google GTX -> Google Client5 -> MyMemory)
+    with adaptive 4-second timeouts, browser emulation headers, and school SSL resilience.
     """
     if not text or not text.strip():
         return ""
@@ -262,11 +273,38 @@ def perform_online_translation(text, source_lang="AUTO", target_lang="IT"):
 
     errors = []
 
-    # 1. Primary Service: MyMemory API (Free tier, no API key required)
+    # 1. Primary Service: Google Translate public GTX endpoint (Fastest & high availability)
+    try:
+        gt_url = f"https://translate.googleapis.com/translate_a/single?client=gtx&sl={sl_google}&tl={tgt_param}&dt=t&q={encoded_query}"
+        raw_data = make_http_get_request(gt_url, timeout=4)
+        gt_json = json.loads(raw_data)
+        if isinstance(gt_json, list) and len(gt_json) > 0 and isinstance(gt_json[0], list):
+            translated_chunks = [chunk[0] for chunk in gt_json[0] if chunk and len(chunk) > 0 and chunk[0]]
+            if translated_chunks:
+                return "".join(translated_chunks)
+    except Exception as e1:
+        print("[QuickTranslator] Google GTX attempt failed:", e1)
+        errors.append(f"Google GTX: {e1}")
+
+    # 2. Secondary Service: Google Translate Client5 endpoint (dict-chrome-ex)
+    try:
+        alt_url = f"https://clients5.google.com/translate_a/t?client=dict-chrome-ex&sl={sl_google}&tl={tgt_param}&q={encoded_query}"
+        raw_data = make_http_get_request(alt_url, timeout=4)
+        alt_json = json.loads(raw_data)
+        if isinstance(alt_json, list) and len(alt_json) > 0:
+            if isinstance(alt_json[0], str):
+                return alt_json[0]
+            elif isinstance(alt_json[0], list) and len(alt_json[0]) > 0 and isinstance(alt_json[0][0], str):
+                return alt_json[0][0]
+    except Exception as e2:
+        print("[QuickTranslator] Google Client5 attempt failed:", e2)
+        errors.append(f"Google Client5: {e2}")
+
+    # 3. Tertiary Service: MyMemory API (Free tier fallback)
     try:
         lang_pair = f"{src_param}|{tgt_param}"
         url = f"https://api.mymemory.translated.net/get?q={encoded_query}&langpair={lang_pair}"
-        raw_data = make_http_get_request(url, timeout=12)
+        raw_data = make_http_get_request(url, timeout=4)
         data = json.loads(raw_data)
         if "responseData" in data and "translatedText" in data["responseData"]:
             result = data["responseData"]["translatedText"]
@@ -274,249 +312,428 @@ def perform_online_translation(text, source_lang="AUTO", target_lang="IT"):
                 return html.unescape(result)
             else:
                 errors.append(f"MyMemory quota warning: {result[:50]}")
-    except Exception as e1:
-        print("[QuickTranslator] MyMemory API attempt failed:", e1)
-        errors.append(f"MyMemory: {e1}")
-
-    # 2. Secondary Service: Google Translate public GTX endpoint
-    try:
-        gt_url = f"https://translate.googleapis.com/translate_a/single?client=gtx&sl={sl_google}&tl={tgt_param}&dt=t&q={encoded_query}"
-        raw_data = make_http_get_request(gt_url, timeout=12)
-        gt_json = json.loads(raw_data)
-        if isinstance(gt_json, list) and len(gt_json) > 0 and isinstance(gt_json[0], list):
-            translated_chunks = [chunk[0] for chunk in gt_json[0] if chunk and len(chunk) > 0 and chunk[0]]
-            if translated_chunks:
-                return "".join(translated_chunks)
-    except Exception as e2:
-        print("[QuickTranslator] Google GTX attempt failed:", e2)
-        errors.append(f"Google GTX: {e2}")
-
-    # 3. Tertiary Service: Google Translate Client5 endpoint (dict-chrome-ex)
-    try:
-        alt_url = f"https://clients5.google.com/translate_a/t?client=dict-chrome-ex&sl={sl_google}&tl={tgt_param}&q={encoded_query}"
-        raw_data = make_http_get_request(alt_url, timeout=12)
-        alt_json = json.loads(raw_data)
-        if isinstance(alt_json, list) and len(alt_json) > 0:
-            if isinstance(alt_json[0], str):
-                return alt_json[0]
-            elif isinstance(alt_json[0], list) and len(alt_json[0]) > 0 and isinstance(alt_json[0][0], str):
-                return alt_json[0][0]
     except Exception as e3:
-        print("[QuickTranslator] Google Client5 attempt failed:", e3)
-        errors.append(f"Google Client5: {e3}")
+        print("[QuickTranslator] MyMemory API attempt failed:", e3)
+        errors.append(f"MyMemory: {e3}")
 
     # If all endpoints failed, build diagnostic report
     report = diagnose_network_failure(errors)
     raise RuntimeError(report)
 
 
-class QuickTranslatorDialog(unohelper.Base):
+_ACTIVE_PANELS = []
+
+
+class TextTransferable(unohelper.Base, XTransferable):
+    """Clipboard transferable helper for plain UTF-16 text."""
+    def __init__(self, text):
+        self.text = text
+
+    def getTransferData(self, flavor):
+        if flavor.MimeType.startswith("text/plain"):
+            return self.text
+        return None
+
+    def getTransferDataFlavors(self):
+        flavor = DataFlavor()
+        flavor.MimeType = "text/plain;charset=utf-16"
+        flavor.HumanPresentableName = "Unicode Text"
+        flavor.DataType = uno.getTypeByName("string")
+        return (flavor,)
+
+    def isDataFlavorSupported(self, flavor):
+        return flavor.MimeType.startswith("text/plain")
+
+
+class QuickTranslatorPanel(unohelper.Base, XUIElement, XToolPanel, XSidebarPanel, XComponent):
     """
-    Native UNO AWT Dialog implementation for Quick Translator.
-    Creates a compact ~280x220 dialog dynamically with top row controls,
-    center source text box, and bottom translated text box.
+    Native UNO Sidebar Panel implementation for Quick Translator.
+    Embeds directly into LibreOffice's right-hand Sidebar (no popup dialog),
+    resizes responsively, and automatically captures selected text from the document.
     """
-    def __init__(self, ctx):
+    def __init__(self, ctx, frame, parent_window, resource_url):
         self.ctx = ctx
-        self.dialog = None
-        self.source_list = None
-        self.target_list = None
-        self.source_box = None
-        self.target_box = None
-        self.status_label = None
+        self.Frame = frame
+        self.ResourceURL = resource_url
+        self.Type = UIElementType.TOOLPANEL
+        self._parent_window = parent_window
+        self._disposed = False
+        self._event_listeners = []
+        self._last_captured_text = ""
+        self._selection_timer = None
+        self._selection_listener = None
+        self._window_listener = None
 
-    def show(self, initial_text=""):
         smgr = self.ctx.ServiceManager
-        
-        # 1. Create Dialog Model (Movable, Closeable, Desktop-independent Floating Window)
-        dialog_model = smgr.createInstanceWithContext("com.sun.star.awt.UnoControlDialogModel", self.ctx)
-        dialog_model.PositionX = 150
-        dialog_model.PositionY = 100
-        dialog_model.Width = 264
-        dialog_model.Height = 275
-        dialog_model.Title = "Quick Translator"
-        dialog_model.DesktopAsParent = True
-        dialog_model.Moveable = True
-        dialog_model.Closeable = True
-        dialog_model.Decoration = True
+        toolkit = parent_window.getToolkit()
+        if toolkit is None:
+            toolkit = smgr.createInstanceWithContext("com.sun.star.awt.Toolkit", self.ctx)
 
-        # Load saved user language preferences (Default: AUTO -> IT)
+        # Create embedded AWT container inside the Sidebar ParentWindow
+        self.container = smgr.createInstanceWithContext("com.sun.star.awt.UnoControlContainer", self.ctx)
+        container_model = smgr.createInstanceWithContext("com.sun.star.awt.UnoControlContainerModel", self.ctx)
+        self.container.setModel(container_model)
+        self.container.createPeer(toolkit, parent_window)
+        self.Window = self.container
+
         prefs = load_saved_preferences()
         saved_src = prefs.get("source_lang", "AUTO")
         saved_tgt = prefs.get("target_lang", "IT")
 
-        # 2. Controls - Row 1: Source Language Dropdown (Lengthened by 20%: Width 88, LineCount=14)
-        src_model = dialog_model.createInstance("com.sun.star.awt.UnoControlListBoxModel")
-        src_model.PositionX = 6
-        src_model.PositionY = 8
-        src_model.Width = 88
-        src_model.Height = 14
-        src_model.Dropdown = True
-        src_model.LineCount = 14
-        src_model.Name = "SourceLangList"
+        def _make_control(ctrl_service, model_service, props):
+            ctrl = smgr.createInstanceWithContext(ctrl_service, self.ctx)
+            model = smgr.createInstanceWithContext(model_service, self.ctx)
+            for k, v in props.items():
+                if k == "Name":
+                    continue
+                setattr(model, k, v)
+            ctrl.setModel(model)
+            return ctrl
+
+        # Row 1: Language selectors & Swap
         src_items = [label for code, label in LANGUAGES]
-        src_model.StringItemList = tuple(src_items)
         src_idx = 0
         for i, item in enumerate(src_items):
             if item.startswith(saved_src + " -") or item == saved_src:
                 src_idx = i
                 break
-        src_model.SelectedItems = (src_idx,)
-        dialog_model.insertByName("SourceLangList", src_model)
 
-        # 3. Controls - Row 1: Swap Button ("⇄")
-        swap_model = dialog_model.createInstance("com.sun.star.awt.UnoControlButtonModel")
-        swap_model.PositionX = 98
-        swap_model.PositionY = 8
-        swap_model.Width = 16
-        swap_model.Height = 14
-        swap_model.Label = "⇄"
-        swap_model.Name = "SwapBtn"
-        swap_model.HelpText = "Swap Languages (Special: AUTO -> IT / DA)"
-        dialog_model.insertByName("SwapBtn", swap_model)
+        self.source_list = _make_control(
+            "com.sun.star.awt.UnoControlListBox",
+            "com.sun.star.awt.UnoControlListBoxModel",
+            {
+                "Name": "SourceLangList",
+                "Dropdown": True,
+                "LineCount": 14,
+                "StringItemList": tuple(src_items),
+                "SelectedItems": (src_idx,),
+            },
+        )
+        self.container.addControl("SourceLangList", self.source_list)
 
-        # 4. Controls - Row 1: Target Language Dropdown (Lengthened by 20%: Width 86, LineCount=14)
-        tgt_model = dialog_model.createInstance("com.sun.star.awt.UnoControlListBoxModel")
-        tgt_model.PositionX = 118
-        tgt_model.PositionY = 8
-        tgt_model.Width = 86
-        tgt_model.Height = 14
-        tgt_model.Dropdown = True
-        tgt_model.LineCount = 14
-        tgt_model.Name = "TargetLangList"
+        self.swap_btn = _make_control(
+            "com.sun.star.awt.UnoControlButton",
+            "com.sun.star.awt.UnoControlButtonModel",
+            {
+                "Name": "SwapBtn",
+                "Label": "⇄",
+                "HelpText": "Swap Languages (AUTO -> IT / DA)",
+            },
+        )
+        self.container.addControl("SwapBtn", self.swap_btn)
+
         tgt_items = [label for code, label in LANGUAGES if code != "AUTO"]
-        tgt_model.StringItemList = tuple(tgt_items)
         tgt_idx = 0
         for i, item in enumerate(tgt_items):
             if item.startswith(saved_tgt + " -") or item == saved_tgt:
                 tgt_idx = i
                 break
-        tgt_model.SelectedItems = (tgt_idx,)
-        dialog_model.insertByName("TargetLangList", tgt_model)
 
-        # 5. Controls - Row 1: Translate Button ("Translate")
-        trans_model = dialog_model.createInstance("com.sun.star.awt.UnoControlButtonModel")
-        trans_model.PositionX = 208
-        trans_model.PositionY = 8
-        trans_model.Width = 50
-        trans_model.Height = 14
-        trans_model.Label = "Translate"
-        trans_model.Name = "TranslateBtn"
-        dialog_model.insertByName("TranslateBtn", trans_model)
+        self.target_list = _make_control(
+            "com.sun.star.awt.UnoControlListBox",
+            "com.sun.star.awt.UnoControlListBoxModel",
+            {
+                "Name": "TargetLangList",
+                "Dropdown": True,
+                "LineCount": 14,
+                "StringItemList": tuple(tgt_items),
+                "SelectedItems": (tgt_idx,),
+            },
+        )
+        self.container.addControl("TargetLangList", self.target_list)
 
-        # 6. Controls - Center: Source Text Section (Bold Title + Multiline VScroll)
-        lbl_src = dialog_model.createInstance("com.sun.star.awt.UnoControlFixedTextModel")
-        lbl_src.PositionX = 6
-        lbl_src.PositionY = 26
-        lbl_src.Width = 252
-        lbl_src.Height = 8
-        lbl_src.Label = "Source Text:"
-        lbl_src.FontWeight = 150.0  # Bold font weight
-        dialog_model.insertByName("LblSource", lbl_src)
+        # Row 2: Action buttons
+        self.translate_btn = _make_control(
+            "com.sun.star.awt.UnoControlButton",
+            "com.sun.star.awt.UnoControlButtonModel",
+            {
+                "Name": "TranslateBtn",
+                "Label": "Translate ALT+Q",
+                "HelpText": "Translate text (Shortcut: ALT+Q)",
+            },
+        )
+        self.container.addControl("TranslateBtn", self.translate_btn)
 
-        src_text_model = dialog_model.createInstance("com.sun.star.awt.UnoControlEditModel")
-        src_text_model.PositionX = 6
-        src_text_model.PositionY = 36
-        src_text_model.Width = 252
-        src_text_model.Height = 98
-        src_text_model.MultiLine = True
-        src_text_model.VScroll = True
-        src_text_model.Text = initial_text
-        src_text_model.Name = "SourceTextBox"
-        dialog_model.insertByName("SourceTextBox", src_text_model)
+        self.copy_btn = _make_control(
+            "com.sun.star.awt.UnoControlButton",
+            "com.sun.star.awt.UnoControlButtonModel",
+            {
+                "Name": "CopyBtn",
+                "Label": "Copy",
+                "HelpText": "Copy translated text to clipboard",
+            },
+        )
+        self.container.addControl("CopyBtn", self.copy_btn)
 
-        # 7. Controls - Lower: Translated Text Section (Bold Title + Multiline VScroll)
-        lbl_tgt = dialog_model.createInstance("com.sun.star.awt.UnoControlFixedTextModel")
-        lbl_tgt.PositionX = 6
-        lbl_tgt.PositionY = 138
-        lbl_tgt.Width = 252
-        lbl_tgt.Height = 8
-        lbl_tgt.Label = "Translated Text:"
-        lbl_tgt.FontWeight = 150.0  # Bold font weight
-        dialog_model.insertByName("LblTarget", lbl_tgt)
+        # Source & Target text areas
+        self.lbl_source = _make_control(
+            "com.sun.star.awt.UnoControlFixedText",
+            "com.sun.star.awt.UnoControlFixedTextModel",
+            {
+                "Name": "LblSource",
+                "Label": "Source Text:",
+                "FontWeight": 150.0,
+            },
+        )
+        self.container.addControl("LblSource", self.lbl_source)
 
-        tgt_text_model = dialog_model.createInstance("com.sun.star.awt.UnoControlEditModel")
-        tgt_text_model.PositionX = 6
-        tgt_text_model.PositionY = 148
-        tgt_text_model.Width = 252
-        tgt_text_model.Height = 98
-        tgt_text_model.MultiLine = True
-        tgt_text_model.VScroll = True
-        tgt_text_model.Text = ""
-        tgt_text_model.Name = "TranslatedTextBox"
-        dialog_model.insertByName("TranslatedTextBox", tgt_text_model)
+        self.source_box = _make_control(
+            "com.sun.star.awt.UnoControlEdit",
+            "com.sun.star.awt.UnoControlEditModel",
+            {
+                "Name": "SourceTextBox",
+                "MultiLine": True,
+                "VScroll": True,
+                "Text": "",
+            },
+        )
+        self.container.addControl("SourceTextBox", self.source_box)
 
-        # 8. Controls - Bottom Status / Actions
-        status_model = dialog_model.createInstance("com.sun.star.awt.UnoControlFixedTextModel")
-        status_model.PositionX = 6
-        status_model.PositionY = 252
-        status_model.Width = 252
-        status_model.Height = 16
-        status_model.Label = "Ready to translate."
-        status_model.Name = "StatusLabel"
-        dialog_model.insertByName("StatusLabel", status_model)
+        self.lbl_target = _make_control(
+            "com.sun.star.awt.UnoControlFixedText",
+            "com.sun.star.awt.UnoControlFixedTextModel",
+            {
+                "Name": "LblTarget",
+                "Label": "Translated Text:",
+                "FontWeight": 150.0,
+            },
+        )
+        self.container.addControl("LblTarget", self.lbl_target)
 
-        # 9. Instantiate Dialog
-        self.dialog = smgr.createInstanceWithContext("com.sun.star.awt.UnoControlDialog", self.ctx)
-        self.dialog.setModel(dialog_model)
+        self.target_box = _make_control(
+            "com.sun.star.awt.UnoControlEdit",
+            "com.sun.star.awt.UnoControlEditModel",
+            {
+                "Name": "TranslatedTextBox",
+                "MultiLine": True,
+                "VScroll": True,
+                "Text": "",
+            },
+        )
+        self.container.addControl("TranslatedTextBox", self.target_box)
 
-        # Get control references
-        self.source_list = self.dialog.getControl("SourceLangList")
-        self.target_list = self.dialog.getControl("TargetLangList")
-        self.source_box = self.dialog.getControl("SourceTextBox")
-        self.target_box = self.dialog.getControl("TranslatedTextBox")
-        self.status_label = self.dialog.getControl("StatusLabel")
+        self.status_label = _make_control(
+            "com.sun.star.awt.UnoControlFixedText",
+            "com.sun.star.awt.UnoControlFixedTextModel",
+            {
+                "Name": "StatusLabel",
+                "Label": "Select text in the document to translate.",
+                "MultiLine": True,
+            },
+        )
+        self.container.addControl("StatusLabel", self.status_label)
 
-        # 10. Bind Action Listeners & Item Listeners
-        class SwapListener(unohelper.Base, XActionListener):
-            def __init__(self, parent):
-                self.parent = parent
+        # Bind UI listeners
+        panel_ref = self
 
-            def actionPerformed(self, actionEvent):
-                self.parent.on_swap_clicked()
-
+        class _ActionListener(unohelper.Base, XActionListener):
+            def __init__(self, callback):
+                self.callback = callback
+            def actionPerformed(self, event):
+                self.callback()
             def disposing(self, source):
                 pass
 
-        class TranslateListener(unohelper.Base, XActionListener):
-            def __init__(self, parent):
-                self.parent = parent
-
-            def actionPerformed(self, actionEvent):
-                self.parent.on_translate_clicked()
-
+        class _ItemListener(unohelper.Base, XItemListener):
+            def itemStateChanged(self, event):
+                panel_ref.on_lang_changed()
             def disposing(self, source):
                 pass
 
-        class ItemChangeListener(unohelper.Base, XItemListener):
-            def __init__(self, parent):
-                self.parent = parent
-
-            def itemStateChanged(self, itemEvent):
-                self.parent.on_lang_changed()
-
+        class _ResizeListener(unohelper.Base, XWindowListener):
+            def windowResized(self, event):
+                panel_ref._layout_controls(event.Width, event.Height)
+            def windowMoved(self, event):
+                pass
+            def windowShown(self, event):
+                ps = panel_ref._parent_window.getPosSize()
+                panel_ref._layout_controls(ps.Width, ps.Height)
+            def windowHidden(self, event):
+                pass
             def disposing(self, source):
                 pass
 
-        self.dialog.getControl("SwapBtn").addActionListener(SwapListener(self))
-        self.dialog.getControl("TranslateBtn").addActionListener(TranslateListener(self))
-        self.target_list.addItemListener(ItemChangeListener(self))
-        self.source_list.addItemListener(ItemChangeListener(self))
+        class _DocSelectionListener(unohelper.Base, XSelectionChangeListener):
+            def selectionChanged(self, event):
+                panel_ref.on_document_selection_changed()
+            def disposing(self, source):
+                pass
 
-        # Create window peer and execute dialog
-        toolkit = smgr.createInstanceWithContext("com.sun.star.awt.Toolkit", self.ctx)
-        self.dialog.createPeer(toolkit, None)
+        self.swap_btn.addActionListener(_ActionListener(self.on_swap_clicked))
+        self.translate_btn.addActionListener(_ActionListener(self.on_translate_clicked))
+        self.copy_btn.addActionListener(_ActionListener(self.on_copy_clicked))
+        self.source_list.addItemListener(_ItemListener())
+        self.target_list.addItemListener(_ItemListener())
 
-        # Automatic Translation on Popup Open:
-        # If source text is already captured from the document or provided, translate immediately
-        if initial_text and initial_text.strip():
+        self._window_listener = _ResizeListener()
+        parent_window.addWindowListener(self._window_listener)
+
+        # Attach live selection listener to the document controller
+        try:
+            controller = frame.getController() if frame is not None else None
+            if controller is not None and hasattr(controller, "addSelectionChangeListener"):
+                self._selection_listener = _DocSelectionListener()
+                controller.addSelectionChangeListener(self._selection_listener)
+        except Exception as e:
+            print("[QuickTranslator] Could not attach selection listener:", e)
+
+        # Initial layout
+        ps = parent_window.getPosSize()
+        self._layout_controls(ps.Width, ps.Height)
+        self.container.setVisible(True)
+
+        _ACTIVE_PANELS.append(self)
+
+        # Capture any text already selected when the panel opens
+        self.capture_and_translate(force=True)
+
+    # --- XUIElement / XToolPanel / XSidebarPanel / XComponent ---
+    def getRealInterface(self):
+        return self
+
+    def getWindow(self):
+        return self.container
+
+    def createAccessible(self, parent_accessible):
+        try:
+            return self.container.getAccessibleContext()
+        except Exception:
+            return None
+
+    def getHeightForWidth(self, width):
+        return LayoutSize(360, -1, 460)
+
+    def getMinimalWidth(self):
+        return 370
+
+    def addEventListener(self, listener):
+        if listener not in self._event_listeners:
+            self._event_listeners.append(listener)
+
+    def removeEventListener(self, listener):
+        if listener in self._event_listeners:
+            self._event_listeners.remove(listener)
+
+    def dispose(self):
+        if self._disposed:
+            return
+        self._disposed = True
+        if self._selection_timer is not None:
             try:
-                self.on_translate_clicked()
-            except Exception as e:
-                print("[QuickTranslator] Auto-translate on open error:", e)
+                self._selection_timer.cancel()
+            except Exception:
+                pass
+            self._selection_timer = None
+        if self._selection_listener is not None and self.Frame is not None:
+            try:
+                controller = self.Frame.getController()
+                if controller is not None and hasattr(controller, "removeSelectionChangeListener"):
+                    controller.removeSelectionChangeListener(self._selection_listener)
+            except Exception:
+                pass
+            self._selection_listener = None
+        if self._window_listener is not None and self._parent_window is not None:
+            try:
+                self._parent_window.removeWindowListener(self._window_listener)
+            except Exception:
+                pass
+            self._window_listener = None
+        if self in _ACTIVE_PANELS:
+            _ACTIVE_PANELS.remove(self)
+        evt = EventObject(self)
+        for listener in list(self._event_listeners):
+            try:
+                listener.disposing(evt)
+            except Exception:
+                pass
+        self._event_listeners.clear()
+        try:
+            self.container.dispose()
+        except Exception:
+            pass
 
-        self.dialog.execute()
-        self.dialog.dispose()
+    # --- Responsive Pixel Layout ---
+    def _layout_controls(self, width, height):
+        if self._disposed:
+            return
+        w = max(int(width), 220)
+        h = max(int(height), 340)
+        self.container.setPosSize(0, 0, w, h, PosSize.POSSIZE)
+
+        m = 8
+        g = 6
+        usable_w = w - 2 * m
+
+        # Row 1: Source dropdown | Swap | Target dropdown
+        row_h = 26
+        y = m
+        swap_w = 30
+        lang_w = max(60, (usable_w - swap_w - 2 * g) // 2)
+        self.source_list.setPosSize(m, y, lang_w, row_h, PosSize.POSSIZE)
+        self.swap_btn.setPosSize(m + lang_w + g, y, swap_w, row_h, PosSize.POSSIZE)
+        self.target_list.setPosSize(m + lang_w + g + swap_w + g, y, usable_w - lang_w - swap_w - 2 * g, row_h, PosSize.POSSIZE)
+
+        # Row 2: Translate button | Copy button
+        y += row_h + g
+        copy_w = 72
+        trans_w = max(80, usable_w - copy_w - g)
+        self.translate_btn.setPosSize(m, y, trans_w, row_h, PosSize.POSSIZE)
+        self.copy_btn.setPosSize(m + trans_w + g, y, copy_w, row_h, PosSize.POSSIZE)
+
+        # Footer StatusLabel
+        status_h = 30
+        status_y = h - m - status_h
+
+        # Remaining space for Source & Target sections
+        y += row_h + 10
+        lbl_h = 18
+        avail_for_boxes = status_y - y - (2 * lbl_h) - 14
+        box_h = max(75, avail_for_boxes // 2)
+
+        self.lbl_source.setPosSize(m, y, usable_w, lbl_h, PosSize.POSSIZE)
+        y += lbl_h + 2
+        self.source_box.setPosSize(m, y, usable_w, box_h, PosSize.POSSIZE)
+        y += box_h + 8
+
+        self.lbl_target.setPosSize(m, y, usable_w, lbl_h, PosSize.POSSIZE)
+        y += lbl_h + 2
+        tgt_box_h = max(75, status_y - y - 6)
+        self.target_box.setPosSize(m, y, usable_w, tgt_box_h, PosSize.POSSIZE)
+
+        self.status_label.setPosSize(m, status_y, usable_w, status_h, PosSize.POSSIZE)
+
+    # --- Selection & Actions ---
+    def capture_and_translate(self, force=False):
+        if self._disposed:
+            return
+        text = get_active_document_selection(self.ctx, frame=self.Frame)
+        if text and (force or text != self._last_captured_text):
+            self._last_captured_text = text
+            self.source_box.setText(text)
+            self.on_translate_clicked()
+
+    def on_document_selection_changed(self):
+        if self._disposed:
+            return
+        text = get_active_document_selection(self.ctx, frame=self.Frame)
+        if not text or text == self._last_captured_text:
+            return
+        self._last_captured_text = text
+        self.source_box.setText(text)
+
+        if self._selection_timer is not None:
+            try:
+                self._selection_timer.cancel()
+            except Exception:
+                pass
+
+        def _debounced_translate():
+            if not self._disposed:
+                self.on_translate_clicked()
+
+        self._selection_timer = threading.Timer(0.45, _debounced_translate)
+        self._selection_timer.daemon = True
+        self._selection_timer.start()
 
     def get_selected_code(self, list_control, is_source=True):
         """Helper to extract language code from list selection."""
@@ -552,27 +769,39 @@ class QuickTranslatorDialog(unohelper.Base):
         tgt_code = self.get_selected_code(self.target_list, is_source=False)
 
         if src_code == "AUTO":
-            # Special requirement: AUTO -> Source = IT, Target = DA
             self.set_selected_by_code(self.source_list, "IT")
             self.set_selected_by_code(self.target_list, "DA")
             self.status_label.setText("Languages swapped: IT (Source) ⇄ DA (Target)")
             save_preferences("IT", "DA")
         else:
-            # Standard swap
             self.set_selected_by_code(self.source_list, tgt_code)
             self.set_selected_by_code(self.target_list, src_code)
             self.status_label.setText(f"Languages swapped: {tgt_code} ⇄ {src_code}")
             save_preferences(tgt_code, src_code)
 
-        # Automatically translate if source text is present
         if self.source_box and self.source_box.getText().strip():
             self.on_translate_clicked()
 
+    def on_copy_clicked(self):
+        """Copies translated text to the system clipboard."""
+        translated = self.target_box.getText()
+        if not translated or not translated.strip():
+            self.status_label.setText("Nothing to copy.")
+            return
+        try:
+            smgr = self.ctx.ServiceManager
+            clipboard = smgr.createInstanceWithContext("com.sun.star.datatransfer.clipboard.SystemClipboard", self.ctx)
+            clipboard.setContents(TextTransferable(translated), None)
+            self.status_label.setText("Translated text copied to clipboard!")
+        except Exception as e:
+            self.status_label.setText(f"Copy failed: {e}")
+
     def on_translate_clicked(self):
         """
-        Translates text in SourceTextBox and writes result to TranslatedTextBox.
-        Handles UTF-8 and network errors gracefully.
+        Translates text in SourceTextBox asynchronously in a background thread.
         """
+        if self._disposed:
+            return
         source_text = self.source_box.getText()
         if not source_text or not source_text.strip():
             self.status_label.setText("Please enter or select some text to translate.")
@@ -580,42 +809,102 @@ class QuickTranslatorDialog(unohelper.Base):
 
         src_code = self.get_selected_code(self.source_list, is_source=True)
         tgt_code = self.get_selected_code(self.target_list, is_source=False)
-
-        # Save user preferences
         save_preferences(src_code, tgt_code)
 
-        self.status_label.setText(f"Translating from {src_code} to {tgt_code}...")
+        self.status_label.setText(f"Translating {src_code} -> {tgt_code}...")
+        self.target_box.setText("Translating in progress, please wait...")
 
-        try:
-            translated = perform_online_translation(source_text, src_code, tgt_code)
-            self.target_box.setText(translated)
-            self.status_label.setText("Translation completed successfully!")
-        except Exception as e:
-            raw_err = str(e)
-            if raw_err.startswith("RuntimeError: "):
-                raw_err = raw_err[len("RuntimeError: "):]
-            self.target_box.setText(raw_err)
-            self.status_label.setText("Network error: see diagnostic report in output box.")
+        def _worker_thread():
+            try:
+                translated = perform_online_translation(source_text, src_code, tgt_code)
+                if not self._disposed:
+                    self.target_box.setText(translated)
+                    self.status_label.setText("Translation completed successfully!")
+            except Exception as e:
+                if not self._disposed:
+                    raw_err = str(e)
+                    if raw_err.startswith("RuntimeError: "):
+                        raw_err = raw_err[len("RuntimeError: "):]
+                    self.target_box.setText(raw_err)
+                    self.status_label.setText("Network error: see diagnostic report.")
+
+        t = threading.Thread(target=_worker_thread, daemon=True)
+        t.start()
+
+
+class QuickTranslatorSidebarFactory(unohelper.Base, XUIElementFactory):
+    """UNO UIElementFactory that creates QuickTranslatorPanel inside the Sidebar."""
+    def __init__(self, ctx):
+        self.ctx = ctx
+
+    def createUIElement(self, resource_url, args):
+        frame = None
+        parent_window = None
+        for prop in args:
+            if prop.Name == "Frame":
+                frame = prop.Value
+            elif prop.Name == "ParentWindow":
+                parent_window = prop.Value
+
+        if parent_window is None:
+            raise uno.RuntimeException("ParentWindow is required for QuickTranslatorPanel", self)
+
+        return QuickTranslatorPanel(self.ctx, frame, parent_window, resource_url)
 
 
 # --- Modern LibreOffice UNO Component Implementation ---
 class TranslatorJobService(unohelper.Base, XJobExecutor):
     """
     Modern UNO Component implementing XJobExecutor.
-    Triggered when the user clicks 'Translate' on the Addons toolbar.
+    Triggered when the user clicks 'Translate' on the Addons toolbar or menu.
+    Opens and focuses the QuickTranslatorDeck in LibreOffice's right-hand Sidebar.
     """
     def __init__(self, ctx):
         self.ctx = ctx
 
     def trigger(self, args):
         try:
-            # 1. Intercept selected text from active document
-            initial_text = get_active_document_selection(self.ctx)
-            
-            # 2. Open native Quick Translator Dialog
-            dialog = QuickTranslatorDialog(self.ctx)
-            dialog.show(initial_text=initial_text)
-        except Exception as e:
+            smgr = self.ctx.ServiceManager
+            desktop = smgr.createInstanceWithContext("com.sun.star.frame.Desktop", self.ctx)
+            frame = desktop.getCurrentFrame()
+            if frame is None:
+                return
+
+            controller = frame.getController()
+            if controller is not None and hasattr(controller, "getSidebar"):
+                sidebar = controller.getSidebar()
+                if sidebar is not None:
+                    was_visible = sidebar.isVisible()
+                    if not was_visible:
+                        sidebar.setVisible(True)
+
+                    def _open_deck():
+                        try:
+                            decks = sidebar.getDecks()
+                            if decks is not None and decks.hasByName("QuickTranslatorDeck"):
+                                deck = decks.getByName("QuickTranslatorDeck")
+                                deck.activate(True)
+                            for panel in list(_ACTIVE_PANELS):
+                                if panel.Frame == frame:
+                                    panel.capture_and_translate(force=True)
+                                    break
+                        except Exception:
+                            traceback.print_exc()
+
+                    if not was_visible:
+                        t = threading.Timer(0.1, _open_deck)
+                        t.daemon = True
+                        t.start()
+                    else:
+                        _open_deck()
+                    return
+
+            # Fallback if panel is already open
+            for panel in list(_ACTIVE_PANELS):
+                if panel.Frame == frame:
+                    panel.capture_and_translate(force=True)
+                    break
+        except Exception:
             traceback.print_exc()
 
 
@@ -626,6 +915,12 @@ g_ImplementationHelper.addImplementation(
     "org.libreoffice.quicktranslator.TranslatorService",
     ("com.sun.star.task.JobExecutor", "com.sun.star.task.XJobExecutor"),
 )
+g_ImplementationHelper.addImplementation(
+    QuickTranslatorSidebarFactory,
+    "org.libreoffice.quicktranslator.SidebarFactory",
+    ("com.sun.star.ui.UIElementFactory",),
+)
+
 
 # Standalone script entry point for direct script execution
 def open_dialog(*args):
