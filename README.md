@@ -1,6 +1,6 @@
 <p align="center">
 <img width="64" height="64" alt="QuickTranslate" src="https://github.com/user-attachments/assets/441db9db-f685-4fcd-b036-e9b406719275" /><br/>
-<img height="400" <img width="1764" height="1031" alt="Screenshot_20261123_192516_1 5" src="https://github.com/user-attachments/assets/dcdc495c-6017-4a07-b1a1-40c0bfa2f5f9" />
+<img height="400" <img alt="Screenshot_20261123_192516_1 5" src="https://github.com/user-attachments/assets/dcdc495c-6017-4a07-b1a1-40c0bfa2f5f9" />
 
 <br/>
 <img width="392" height="103" alt="LibreOffice_logo_01" src="https://github.com/user-attachments/assets/17d3c5d6-18fc-4802-98b1-0a63d663102a" />
